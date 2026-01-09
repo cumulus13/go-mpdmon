@@ -1,4 +1,5 @@
-# goreleaser.yml
+# .goreleaser.yml
+version: 2
 project_name: mpdmon
 before:
   hooks:
@@ -10,25 +11,18 @@ builds:
       - linux
       - windows
       - darwin
-      - freebsd
-      - openbsd
-      - netbsd
-      - dragonfly
-      - solaris
     goarch:
       - amd64
       - 386
       - arm
       - arm64
     goarm:
-      - 6
       - 7
     ignore:
       - goos: darwin
         goarch: 386
-      - goos: linux
+      - goos: darwin
         goarch: arm
-        goarm: 6
     ldflags:
       - -s -w -X main.version={{.Version}}
     binary: mpdmon
@@ -36,17 +30,15 @@ archives:
   - format: tar.gz
     name_template: >-
       {{ .ProjectName }}-
-      {{- .Version }}-
-      {{- .Os }}-
+      {{- title .Os }}-
       {{- .Arch }}{{ if .Arm }}v{{ .Arm }}{{ end }}
     format_overrides:
       - goos: windows
         format: zip
     files:
-      - README.md
-      - LICENSE
-      - config.example.toml
-      - CHANGELOG.md
+      - LICENSE*
+      - README*
+      - CHANGELOG*
 checksum:
   name_template: 'checksums.txt'
   algorithm: sha256
@@ -58,6 +50,8 @@ changelog:
     exclude:
       - '^docs:'
       - '^test:'
-      - '^chore:'
-      - Merge pull request
-      - Merge branch
+release:
+  github:
+    owner: Hadi Cahyadi
+    name: https://github.com/cumulus13/go-mpdmon
+  prerelease: auto

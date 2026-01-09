@@ -4,10 +4,18 @@ on:
   push:
     tags:
       - 'v*'
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
   workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
 
 permissions:
   contents: write
+  packages: write
 
 jobs:
   test:
@@ -25,74 +33,70 @@ jobs:
       - name: Run tests
         run: go test ./...
 
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.21'
+
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v3
+        with:
+          version: latest
+
   build:
     name: Build
-    needs: test
+    needs: [test, lint]
     strategy:
       matrix:
         include:
+          # Windows builds
           - os: windows
             arch: amd64
             binary: mpdmon.exe
-            cross: false
+            suffix: .exe
           - os: windows
             arch: 386
             binary: mpdmon.exe
-            cross: false
+            suffix: .exe
           - os: windows
             arch: arm64
             binary: mpdmon.exe
-            cross: false
+            suffix: .exe
+          # Linux builds
           - os: linux
             arch: amd64
             binary: mpdmon
-            cross: false
+            suffix: ''
           - os: linux
             arch: 386
             binary: mpdmon
-            cross: false
+            suffix: ''
           - os: linux
             arch: arm64
             binary: mpdmon
-            cross: false
+            suffix: ''
           - os: linux
             arch: arm
             binary: mpdmon
-            cross: false
+            suffix: ''
             goarm: 7
+          # macOS builds
           - os: darwin
             arch: amd64
             binary: mpdmon
-            cross: false
+            suffix: ''
           - os: darwin
             arch: arm64
             binary: mpdmon
-            cross: false
-          - os: freebsd
-            arch: amd64
-            binary: mpdmon
-            cross: true
-          - os: freebsd
-            arch: 386
-            binary: mpdmon
-            cross: true
-          - os: openbsd
-            arch: amd64
-            binary: mpdmon
-            cross: true
-          - os: netbsd
-            arch: amd64
-            binary: mpdmon
-            cross: true
-          - os: dragonfly
-            arch: amd64
-            binary: mpdmon
-            cross: true
-          - os: solaris
-            arch: amd64
-            binary: mpdmon
-            cross: true
-    runs-on: ${{ matrix.os == 'windows' && 'windows-latest' || matrix.os == 'darwin' && 'macos-latest' || 'ubuntu-latest' }}
+            suffix: ''
+    runs-on: ubuntu-latest
     
     steps:
       - name: Checkout code
@@ -103,83 +107,60 @@ jobs:
         with:
           go-version: '1.21'
 
-      - name: Setup Cross Compilation for non-native platforms
-        if: ${{ matrix.cross }}
-        run: |
-          go install github.com/mitchellh/gox@latest
-          echo "$HOME/go/bin" >> $GITHUB_PATH
-
       - name: Get dependencies
         run: go mod download
 
       - name: Build
-        if: ${{ !matrix.cross }}
+        env:
+          GOOS: ${{ matrix.os }}
+          GOARCH: ${{ matrix.arch }}
+          GOARM: ${{ matrix.goarm || '' }}
         run: |
-          GOOS=${{ matrix.os }} GOARCH=${{ matrix.arch }} GOARM=${{ matrix.goarm || '' }} go build \
-            -ldflags="-s -w -X main.version=${{ github.ref_name }}" \
-            -o dist/${{ matrix.os }}-${{ matrix.arch }}/${{ matrix.binary }} \
+          # Get version from tag or commit
+          VERSION="dev"
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/}"
+          elif [[ "${{ github.ref }}" == refs/heads/master ]]; then
+            VERSION="$(git rev-parse --short HEAD)"
+          fi
+          
+          echo "Building version: $VERSION"
+          
+          go build \
+            -ldflags="-s -w -X main.version=$VERSION" \
+            -o mpdmon${{ matrix.suffix }} \
             .
-
-      - name: Build (cross compilation)
-        if: ${{ matrix.cross }}
-        run: |
-          gox -os="${{ matrix.os }}" -arch="${{ matrix.arch }}" \
-            -ldflags="-s -w -X main.version=${{ github.ref_name }}" \
-            -output "dist/{{.OS}}-{{.Arch}}/mpdmon" \
-            .
-
-      - name: Create README for platform
-        run: |
-          mkdir -p dist/${{ matrix.os }}-${{ matrix.arch }}
-          cat > dist/${{ matrix.os }}-${{ matrix.arch }}/README-${{ matrix.os }}-${{ matrix.arch }}.txt << 'EOF'
-          MPD Monitor ${{ github.ref_name }}
-          
-          Platform: ${{ matrix.os }}/${{ matrix.arch }}
-          Build Date: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
-          
-          Usage: ./${{ matrix.binary }} [options]
-          
-          Options:
-            -config string        Path to TOML config file
-            -mpd-host string      MPD host (default: localhost or MPD_HOST env)
-            -mpd-port string      MPD port (default: 6600 or MPD_PORT env)
-            -mpd-timeout int      MPD timeout in seconds (default: 10 or MPD_TIMEOUT env)
-            -gntp-host string     GNTP/Growl host (default: localhost)
-            -gntp-port int        GNTP/Growl port (default: 23053)
-            -gntp-password string GNTP/Growl password
-            -icon-mode string     Icon mode: binary, dataurl, fileurl, httpurl (default: binary)
-          
-          Configuration:
-            You can create a config file at ~/.config/mpdmon/config.toml or use command-line options.
-          
-          Environment Variables:
-            MPD_HOST, MPD_PORT, MPD_TIMEOUT - MPD connection settings
-            DEBUG=1 - Enable debug mode
-          
-          For more information: https://github.com/${{ github.repository }}
-          EOF
 
       - name: Create archive (Windows)
         if: ${{ matrix.os == 'windows' }}
         run: |
-          cd dist/${{ matrix.os }}-${{ matrix.arch }}
-          7z a -tzip ../../mpdmon-${{ github.ref_name }}-${{ matrix.os }}-${{ matrix.arch }}.zip .
-          cd ../..
+          mkdir -p dist
+          mv mpdmon.exe mpdmon-${{ matrix.os }}-${{ matrix.arch }}/
+          cp README.md mpdmon-${{ matrix.os }}-${{ matrix.arch }}/
+          cp LICENSE mpdmon-${{ matrix.os }}-${{ matrix.arch }}/
+          
+          cd mpdmon-${{ matrix.os }}-${{ matrix.arch }}
+          zip -r ../dist/mpdmon-${{ matrix.os }}-${{ matrix.arch }}.zip .
+          cd ..
 
       - name: Create archive (Unix-like)
         if: ${{ matrix.os != 'windows' }}
         run: |
-          cd dist/${{ matrix.os }}-${{ matrix.arch }}
-          tar czf ../../mpdmon-${{ github.ref_name }}-${{ matrix.os }}-${{ matrix.arch }}.tar.gz .
-          cd ../..
+          mkdir -p dist
+          mv mpdmon mpdmon-${{ matrix.os }}-${{ matrix.arch }}/
+          cp README.md mpdmon-${{ matrix.os }}-${{ matrix.arch }}/
+          cp LICENSE mpdmon-${{ matrix.os }}-${{ matrix.arch }}/
+          
+          cd mpdmon-${{ matrix.os }}-${{ matrix.arch }}
+          tar czf ../dist/mpdmon-${{ matrix.os }}-${{ matrix.arch }}.tar.gz .
+          cd ..
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: mpdmon-${{ matrix.os }}-${{ matrix.arch }}
           path: |
-            mpdmon-${{ github.ref_name }}-${{ matrix.os }}-${{ matrix.arch }}.*
-            dist/${{ matrix.os }}-${{ matrix.arch }}/
+            dist/mpdmon-${{ matrix.os }}-${{ matrix.arch }}.*
 
   release:
     name: Create Release
@@ -193,10 +174,18 @@ jobs:
         with:
           path: artifacts
 
-      - name: List downloaded artifacts
-        run: find artifacts -type f -name "*.zip" -o -name "*.tar.gz" | sort
+      - name: Generate SHA256 checksums
+        run: |
+          cd artifacts
+          find . -name "*.zip" -o -name "*.tar.gz" | while read file; do
+            sha256sum "$file" | awk '{print $1, $2}' > "$file.sha256.txt"
+          done
+          
+          # Create combined checksums file
+          cat *.sha256.txt > checksums.txt
 
       - name: Create Release
+        id: create_release
         uses: softprops/action-gh-release@v1
         with:
           name: Release ${{ github.ref_name }}
@@ -217,6 +206,14 @@ jobs:
             | macOS | amd64 | [mpdmon-${{ github.ref_name }}-darwin-amd64.tar.gz](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/mpdmon-${{ github.ref_name }}-darwin-amd64.tar.gz) |
             | macOS | arm64 | [mpdmon-${{ github.ref_name }}-darwin-arm64.tar.gz](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/mpdmon-${{ github.ref_name }}-darwin-arm64.tar.gz) |
             
+            ### 🔐 Verification
+            
+            SHA256 Checksums:
+            
+            ```bash
+            $(cat artifacts/checksums.txt)
+            ```
+            
             ## 🚀 Features
             
             - Real-time MPD monitoring
@@ -225,22 +222,18 @@ jobs:
             - Cross-platform support
             - Configurable via config file or environment variables
             
-            ## 📖 Usage
+            ## 📖 Quick Start
             
             ```bash
-            # Basic usage
+            # Download for your platform
+            wget https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/mpdmon-${{ github.ref_name }}-linux-amd64.tar.gz
+            tar xzf mpdmon*.tar.gz
             ./mpdmon
-            
-            # With config file
-            ./mpdmon -config ~/.config/mpdmon/config.toml
-            
-            # Custom MPD host
-            ./mpdmon -mpd-host 192.168.1.100 -mpd-port 6600
             ```
             
             ## 🔧 Configuration
             
-            See [README.md](https://github.com/${{ github.repository }}/blob/main/README.md) for detailed configuration options.
+            See [README.md](https://github.com/${{ github.repository }}/blob/master/README.md) for detailed configuration options.
             
             ## 📄 License
             
@@ -254,34 +247,89 @@ jobs:
           files: |
             artifacts/**/*.zip
             artifacts/**/*.tar.gz
+            artifacts/checksums.txt
           generate_release_notes: true
 
-  publish:
-    name: Publish to Package Managers
+  docker:
+    name: Build Docker Image
+    needs: test
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@v2
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v4
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=ref,event=branch
+            type=sha,prefix={{branch}}-,format=short
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          platforms: linux/amd64,linux/arm64,linux/arm/v7
+
+  publish-snap:
+    name: Publish to Snapcraft
     needs: release
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
     
     steps:
-      - name: Download artifacts
-        uses: actions/download-artifact@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Snapcraft
+        uses: samuelmeuli/action-snapcraft@v2
         with:
-          path: artifacts
+          snapcraft_token: ${{ secrets.SNAPCRAFT_TOKEN }}
 
-      - name: Setup GoReleaser (optional)
-        run: |
-          go install github.com/goreleaser/goreleaser@latest
-          echo "$HOME/go/bin" >> $GITHUB_PATH
+      - name: Build and publish snap
+        run: snapcraft upload --release=stable *.snap
 
-      - name: Generate SHA256 checksums
-        run: |
-          cd artifacts
-          find . -name "*.zip" -o -name "*.tar.gz" | while read file; do
-            sha256sum "$file" > "$file.sha256"
-          done
+  nightly:
+    name: Nightly Build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      - name: Upload checksums to release
-        uses: softprops/action-gh-release@v1
+      - name: Set up Go
+        uses: actions/setup-go@v4
         with:
-          tag_name: ${{ github.ref_name }}
-          files: artifacts/**/*.sha256
+          go-version: '1.21'
+
+      - name: Build nightly
+        run: |
+          VERSION="nightly-$(git rev-parse --short HEAD)"
+          GOOS=linux GOARCH=amd64 go build \
+            -ldflags="-s -w -X main.version=$VERSION" \
+            -o mpdmon-nightly-linux-amd64 \
+            .
+
+      - name: Upload nightly artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mpdmon-nightly
+          path: mpdmon-nightly-linux-amd64
