@@ -1,0 +1,287 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.21'
+
+      - name: Run tests
+        run: go test ./...
+
+  build:
+    name: Build
+    needs: test
+    strategy:
+      matrix:
+        include:
+          - os: windows
+            arch: amd64
+            binary: mpdmon.exe
+            cross: false
+          - os: windows
+            arch: 386
+            binary: mpdmon.exe
+            cross: false
+          - os: windows
+            arch: arm64
+            binary: mpdmon.exe
+            cross: false
+          - os: linux
+            arch: amd64
+            binary: mpdmon
+            cross: false
+          - os: linux
+            arch: 386
+            binary: mpdmon
+            cross: false
+          - os: linux
+            arch: arm64
+            binary: mpdmon
+            cross: false
+          - os: linux
+            arch: arm
+            binary: mpdmon
+            cross: false
+            goarm: 7
+          - os: darwin
+            arch: amd64
+            binary: mpdmon
+            cross: false
+          - os: darwin
+            arch: arm64
+            binary: mpdmon
+            cross: false
+          - os: freebsd
+            arch: amd64
+            binary: mpdmon
+            cross: true
+          - os: freebsd
+            arch: 386
+            binary: mpdmon
+            cross: true
+          - os: openbsd
+            arch: amd64
+            binary: mpdmon
+            cross: true
+          - os: netbsd
+            arch: amd64
+            binary: mpdmon
+            cross: true
+          - os: dragonfly
+            arch: amd64
+            binary: mpdmon
+            cross: true
+          - os: solaris
+            arch: amd64
+            binary: mpdmon
+            cross: true
+    runs-on: ${{ matrix.os == 'windows' && 'windows-latest' || matrix.os == 'darwin' && 'macos-latest' || 'ubuntu-latest' }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.21'
+
+      - name: Setup Cross Compilation for non-native platforms
+        if: ${{ matrix.cross }}
+        run: |
+          go install github.com/mitchellh/gox@latest
+          echo "$HOME/go/bin" >> $GITHUB_PATH
+
+      - name: Get dependencies
+        run: go mod download
+
+      - name: Build
+        if: ${{ !matrix.cross }}
+        run: |
+          GOOS=${{ matrix.os }} GOARCH=${{ matrix.arch }} GOARM=${{ matrix.goarm || '' }} go build \
+            -ldflags="-s -w -X main.version=${{ github.ref_name }}" \
+            -o dist/${{ matrix.os }}-${{ matrix.arch }}/${{ matrix.binary }} \
+            .
+
+      - name: Build (cross compilation)
+        if: ${{ matrix.cross }}
+        run: |
+          gox -os="${{ matrix.os }}" -arch="${{ matrix.arch }}" \
+            -ldflags="-s -w -X main.version=${{ github.ref_name }}" \
+            -output "dist/{{.OS}}-{{.Arch}}/mpdmon" \
+            .
+
+      - name: Create README for platform
+        run: |
+          mkdir -p dist/${{ matrix.os }}-${{ matrix.arch }}
+          cat > dist/${{ matrix.os }}-${{ matrix.arch }}/README-${{ matrix.os }}-${{ matrix.arch }}.txt << 'EOF'
+          MPD Monitor ${{ github.ref_name }}
+          
+          Platform: ${{ matrix.os }}/${{ matrix.arch }}
+          Build Date: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+          
+          Usage: ./${{ matrix.binary }} [options]
+          
+          Options:
+            -config string        Path to TOML config file
+            -mpd-host string      MPD host (default: localhost or MPD_HOST env)
+            -mpd-port string      MPD port (default: 6600 or MPD_PORT env)
+            -mpd-timeout int      MPD timeout in seconds (default: 10 or MPD_TIMEOUT env)
+            -gntp-host string     GNTP/Growl host (default: localhost)
+            -gntp-port int        GNTP/Growl port (default: 23053)
+            -gntp-password string GNTP/Growl password
+            -icon-mode string     Icon mode: binary, dataurl, fileurl, httpurl (default: binary)
+          
+          Configuration:
+            You can create a config file at ~/.config/mpdmon/config.toml or use command-line options.
+          
+          Environment Variables:
+            MPD_HOST, MPD_PORT, MPD_TIMEOUT - MPD connection settings
+            DEBUG=1 - Enable debug mode
+          
+          For more information: https://github.com/${{ github.repository }}
+          EOF
+
+      - name: Create archive (Windows)
+        if: ${{ matrix.os == 'windows' }}
+        run: |
+          cd dist/${{ matrix.os }}-${{ matrix.arch }}
+          7z a -tzip ../../mpdmon-${{ github.ref_name }}-${{ matrix.os }}-${{ matrix.arch }}.zip .
+          cd ../..
+
+      - name: Create archive (Unix-like)
+        if: ${{ matrix.os != 'windows' }}
+        run: |
+          cd dist/${{ matrix.os }}-${{ matrix.arch }}
+          tar czf ../../mpdmon-${{ github.ref_name }}-${{ matrix.os }}-${{ matrix.arch }}.tar.gz .
+          cd ../..
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mpdmon-${{ matrix.os }}-${{ matrix.arch }}
+          path: |
+            mpdmon-${{ github.ref_name }}-${{ matrix.os }}-${{ matrix.arch }}.*
+            dist/${{ matrix.os }}-${{ matrix.arch }}/
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: List downloaded artifacts
+        run: find artifacts -type f -name "*.zip" -o -name "*.tar.gz" | sort
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: Release ${{ github.ref_name }}
+          body: |
+            # MPD Monitor ${{ github.ref_name }}
+            
+            ## 📦 Downloads
+            
+            | Platform | Architecture | Download |
+            |----------|--------------|----------|
+            | Windows | amd64 | [mpdmon-${{ github.ref_name }}-windows-amd64.zip](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/mpdmon-${{ github.ref_name }}-windows-amd64.zip) |
+            | Windows | 386 | [mpdmon-${{ github.ref_name }}-windows-386.zip](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/mpdmon-${{ github.ref_name }}-windows-386.zip) |
+            | Windows | arm64 | [mpdmon-${{ github.ref_name }}-windows-arm64.zip](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/mpdmon-${{ github.ref_name }}-windows-arm64.zip) |
+            | Linux | amd64 | [mpdmon-${{ github.ref_name }}-linux-amd64.tar.gz](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/mpdmon-${{ github.ref_name }}-linux-amd64.tar.gz) |
+            | Linux | 386 | [mpdmon-${{ github.ref_name }}-linux-386.tar.gz](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/mpdmon-${{ github.ref_name }}-linux-386.tar.gz) |
+            | Linux | arm64 | [mpdmon-${{ github.ref_name }}-linux-arm64.tar.gz](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/mpdmon-${{ github.ref_name }}-linux-arm64.tar.gz) |
+            | Linux | armv7 | [mpdmon-${{ github.ref_name }}-linux-arm.tar.gz](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/mpdmon-${{ github.ref_name }}-linux-arm.tar.gz) |
+            | macOS | amd64 | [mpdmon-${{ github.ref_name }}-darwin-amd64.tar.gz](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/mpdmon-${{ github.ref_name }}-darwin-amd64.tar.gz) |
+            | macOS | arm64 | [mpdmon-${{ github.ref_name }}-darwin-arm64.tar.gz](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/mpdmon-${{ github.ref_name }}-darwin-arm64.tar.gz) |
+            
+            ## 🚀 Features
+            
+            - Real-time MPD monitoring
+            - GNTP/Growl notifications
+            - Album art display
+            - Cross-platform support
+            - Configurable via config file or environment variables
+            
+            ## 📖 Usage
+            
+            ```bash
+            # Basic usage
+            ./mpdmon
+            
+            # With config file
+            ./mpdmon -config ~/.config/mpdmon/config.toml
+            
+            # Custom MPD host
+            ./mpdmon -mpd-host 192.168.1.100 -mpd-port 6600
+            ```
+            
+            ## 🔧 Configuration
+            
+            See [README.md](https://github.com/${{ github.repository }}/blob/main/README.md) for detailed configuration options.
+            
+            ## 📄 License
+            
+            MIT License
+            
+            ---
+            
+            *Built with GitHub Actions*
+          draft: false
+          prerelease: false
+          files: |
+            artifacts/**/*.zip
+            artifacts/**/*.tar.gz
+          generate_release_notes: true
+
+  publish:
+    name: Publish to Package Managers
+    needs: release
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Setup GoReleaser (optional)
+        run: |
+          go install github.com/goreleaser/goreleaser@latest
+          echo "$HOME/go/bin" >> $GITHUB_PATH
+
+      - name: Generate SHA256 checksums
+        run: |
+          cd artifacts
+          find . -name "*.zip" -o -name "*.tar.gz" | while read file; do
+            sha256sum "$file" > "$file.sha256"
+          done
+
+      - name: Upload checksums to release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: artifacts/**/*.sha256
