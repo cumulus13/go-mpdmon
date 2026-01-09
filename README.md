@@ -214,7 +214,7 @@ export MPD_HOST=192.168.1.100
 ────────────────────────────────────────────────────────────
 ```
 
-## Notifikasi GNTP
+## Notifications GNTP
 Every song or state change will send a notification with:
 - **Title**: Song title or status
 - **Message**: Complete information with HTML format and color
