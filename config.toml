@@ -1,0 +1,28 @@
+# MPD Monitor Configuration File
+
+[mpd]
+# MPD server host
+host = "222.222.222.5"
+
+# MPD server port
+port = "6603"
+
+# Connection timeout in seconds
+timeout = 10
+
+[gntp]
+# GNTP/Growl server host
+host = "222.222.222.101"
+
+# GNTP/Growl server port (default Growl port is 23053)
+port = 23053
+
+# GNTP/Growl password (leave empty if no password)
+password = ""
+
+# Icon delivery mode: binary (recommended for Windows), dataurl, fileurl, httpurl
+# binary: x-growl-resource://UUID + binary data (most reliable, Windows tested!)
+# dataurl: data:image/png;base64,... (good for Android)
+# fileurl: file:///path/to/icon.png (requires absolute path)
+# httpurl: http://example.com/icon.png (web-hosted icons)
+icon_mode = "binary"
