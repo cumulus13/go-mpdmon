@@ -10,6 +10,9 @@ on:
   workflow_dispatch:
 
 env:
+  # Use variables for versions
+  GO_VERSION: "1.21.x"  # Change this to match your actual Go version from go.mod
+  GOLANGCI_LINT_VERSION: "v1.59.0"  # Compatible with Go 1.21-1.22
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
 
@@ -18,113 +21,131 @@ permissions:
   packages: write
 
 jobs:
+  # First, detect actual Go version from go.mod
+  detect:
+    name: Detect Go Version
+    runs-on: ubuntu-latest
+    outputs:
+      go_version: ${{ steps.detect.outputs.go_version }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Detect Go version from go.mod
+        id: detect
+        run: |
+          # Extract Go version from go.mod
+          if [ -f go.mod ]; then
+            GO_VERSION=$(grep '^go ' go.mod | awk '{print $2}')
+            echo "Found Go version in go.mod: $GO_VERSION"
+            echo "go_version=$GO_VERSION" >> $GITHUB_OUTPUT
+          else
+            echo "No go.mod found, using default"
+            echo "go_version=1.21" >> $GITHUB_OUTPUT
+          fi
+
   test:
     name: Test
     runs-on: ubuntu-latest
+    needs: detect
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Go
+      - name: Set up Go with detected version
         uses: actions/setup-go@v4
         with:
-          go-version: '1.21'
+          go-version: ${{ needs.detect.outputs.go_version }}
 
       - name: Cache Go modules
         uses: actions/cache@v3
         with:
-          path: ~/go/pkg/mod
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
           key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
           restore-keys: |
             ${{ runner.os }}-go-
 
+      - name: Verify Go version
+        run: go version
+
       - name: Run tests
-        run: go test ./...
+        run: go test -v ./...
 
   lint:
     name: Lint
     runs-on: ubuntu-latest
+    needs: detect
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Go
+      - name: Set up Go with detected version
         uses: actions/setup-go@v4
         with:
-          go-version: '1.21'  # Match this with your actual Go version
+          go-version: ${{ needs.detect.outputs.go_version }}
 
       - name: Cache Go modules
         uses: actions/cache@v3
         with:
-          path: ~/go/pkg/mod
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
           key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
           restore-keys: |
             ${{ runner.os }}-go-
 
-      - name: Run golangci-lint with specific version
+      - name: Install compatible golangci-lint
         run: |
-          # Install a specific version of golangci-lint that matches your Go version
-          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin v1.54.2
-          golangci-lint --version
-          golangci-lint run
+          # Check Go version to determine compatible golangci-lint
+          GO_MAJOR=$(go version | grep -oP 'go\K\d+\.\d+' | cut -d. -f1)
+          GO_MINOR=$(go version | grep -oP 'go\K\d+\.\d+' | cut -d. -f2)
+          
+          echo "Go version: $GO_MAJOR.$GO_MINOR"
+          
+          # Select golangci-lint version based on Go version
+          if [ "$GO_MAJOR" -eq 1 ] && [ "$GO_MINOR" -ge 21 ] && [ "$GO_MINOR" -le 22 ]; then
+            LINT_VERSION="v1.59.0"  # Compatible with Go 1.21-1.22
+          elif [ "$GO_MAJOR" -eq 1 ] && [ "$GO_MINOR" -ge 23 ]; then
+            LINT_VERSION="v1.64.0"  # For Go 1.23+
+          else
+            LINT_VERSION="v1.57.2"  # Older Go versions
+          fi
+          
+          echo "Installing golangci-lint $LINT_VERSION"
+          
+          # Install golangci-lint
+          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | \
+            sh -s -- -b $(go env GOPATH)/bin $LINT_VERSION
+          
+          # Verify installation
+          $(go env GOPATH)/bin/golangci-lint --version
+
+      - name: Run golangci-lint
+        run: |
+          $(go env GOPATH)/bin/golangci-lint run --timeout=5m
 
   build:
     name: Build
+    runs-on: ubuntu-latest
     needs: [test, lint]
     strategy:
       matrix:
+        # Build only the most common platforms first
         include:
-          # Windows builds
           - os: windows
             arch: amd64
             binary: mpdmon.exe
             suffix: .exe
-            build_os: windows-latest
-          - os: windows
-            arch: 386
-            binary: mpdmon.exe
-            suffix: .exe
-            build_os: windows-latest
-          - os: windows
-            arch: arm64
-            binary: mpdmon.exe
-            suffix: .exe
-            build_os: windows-latest
-          # Linux builds
           - os: linux
             arch: amd64
             binary: mpdmon
             suffix: ''
-            build_os: ubuntu-latest
-          - os: linux
-            arch: 386
-            binary: mpdmon
-            suffix: ''
-            build_os: ubuntu-latest
-          - os: linux
-            arch: arm64
-            binary: mpdmon
-            suffix: ''
-            build_os: ubuntu-latest
-          - os: linux
-            arch: arm
-            binary: mpdmon
-            suffix: ''
-            goarm: 7
-            build_os: ubuntu-latest
-          # macOS builds
           - os: darwin
             arch: amd64
             binary: mpdmon
             suffix: ''
-            build_os: macos-latest
-          - os: darwin
-            arch: arm64
-            binary: mpdmon
-            suffix: ''
-            build_os: macos-latest
-    runs-on: ${{ matrix.build_os }}
-    
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -132,362 +153,182 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
-          go-version: '1.21'
+          go-version: ${{ needs.detect.outputs.go_version }}
 
       - name: Cache Go modules
         uses: actions/cache@v3
         with:
-          path: ~/go/pkg/mod
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
           key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
           restore-keys: |
             ${{ runner.os }}-go-
 
-      - name: Get dependencies
-        run: go mod download
-
-      - name: Build
+      - name: Build binary
         env:
           GOOS: ${{ matrix.os }}
           GOARCH: ${{ matrix.arch }}
-          GOARM: ${{ matrix.goarm || '' }}
         run: |
-          # Get version from tag or commit
+          # Get version info
           VERSION="dev"
           if [[ "${{ github.ref }}" == refs/tags/* ]]; then
             VERSION="${GITHUB_REF#refs/tags/}"
           elif [[ "${{ github.ref }}" == refs/heads/master ]]; then
-            VERSION="$(git rev-parse --short HEAD)"
+            VERSION="master-$(git rev-parse --short HEAD)"
           fi
           
-          echo "Building version: $VERSION"
-          echo "Platform: $GOOS/$GOARCH"
+          echo "Building: $VERSION for $GOOS/$GOARCH"
           
-          # Create output directory
-          mkdir -p dist
-          
-          # Build the binary
+          # Build with optimizations
           go build \
             -ldflags="-s -w -X main.version=$VERSION" \
-            -o dist/mpdmon${{ matrix.suffix }} \
+            -o mpdmon${{ matrix.suffix }} \
             .
 
-      - name: Create README file
-        run: |
-          cat > dist/README.md << 'EOF'
-          # MPD Monitor ${{ env.VERSION || 'dev' }}
-          
-          Platform: ${{ matrix.os }}/${{ matrix.arch }}
-          Build Date: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
-          
-          ## Usage
-          
-          ```bash
-          ./mpdmon [options]
-          ```
-          
-          ### Options
-          
-          - `-config string` - Path to TOML config file
-          - `-mpd-host string` - MPD host (default: localhost or MPD_HOST env)
-          - `-mpd-port string` - MPD port (default: 6600 or MPD_PORT env)
-          - `-mpd-timeout int` - MPD timeout in seconds (default: 10 or MPD_TIMEOUT env)
-          - `-gntp-host string` - GNTP/Growl host (default: localhost)
-          - `-gntp-port int` - GNTP/Growl port (default: 23053)
-          - `-gntp-password string` - GNTP/Growl password
-          - `-icon-mode string` - Icon mode: binary, dataurl, fileurl, httpurl (default: binary)
-          
-          ## Configuration
-          
-          Create a config file at `~/.config/mpdmon/config.toml`:
-          
-          ```toml
-          [mpd]
-          host = "localhost"
-          port = "6600"
-          timeout = 10
-          
-          [gntp]
-          host = "localhost"
-          port = 23053
-          password = ""
-          icon_mode = "binary"
-          ```
-          
-          ## Environment Variables
-          
-          - `MPD_HOST` - MPD server host
-          - `MPD_PORT` - MPD server port
-          - `MPD_TIMEOUT` - Connection timeout in seconds
-          - `DEBUG=1` - Enable debug mode
-          
-          ## License
-          
-          MIT License
-          
-          ## Source
-          
-          https://github.com/${{ github.repository }}
-          EOF
-
-      - name: Copy LICENSE file
-        run: cp LICENSE dist/
-
-      - name: Create archive
-        if: ${{ matrix.os == 'windows' }}
-        run: |
-          cd dist
-          zip -r ../mpdmon-${{ matrix.os }}-${{ matrix.arch }}.zip *
-          cd ..
-
-      - name: Create tar.gz archive
-        if: ${{ matrix.os != 'windows' }}
-        run: |
-          cd dist
-          tar czf ../mpdmon-${{ matrix.os }}-${{ matrix.arch }}.tar.gz *
-          cd ..
-
-      - name: Upload build artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: mpdmon-${{ matrix.os }}-${{ matrix.arch }}
-          path: |
-            mpdmon-${{ matrix.os }}-${{ matrix.arch }}.*
-            dist/
+          path: mpdmon${{ matrix.suffix }}
+
+  # Additional build job for more platforms (optional)
+  build-extended:
+    name: Build Extended Platforms
+    runs-on: ubuntu-latest
+    needs: [test, lint]
+    if: startsWith(github.ref, 'refs/tags/')  # Only run for tags/releases
+    strategy:
+      matrix:
+        include:
+          - os: windows
+            arch: 386
+            binary: mpdmon.exe
+            suffix: .exe
+          - os: linux
+            arch: 386
+            binary: mpdmon
+            suffix: ''
+          - os: linux
+            arch: arm64
+            binary: mpdmon
+            suffix: ''
+          - os: darwin
+            arch: arm64
+            binary: mpdmon
+            suffix: ''
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: ${{ needs.detect.outputs.go_version }}
+
+      - name: Build binary
+        env:
+          GOOS: ${{ matrix.os }}
+          GOARCH: ${{ matrix.arch }}
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/}"
+          echo "Building: $VERSION for $GOOS/$GOARCH"
+          
+          go build \
+            -ldflags="-s -w -X main.version=$VERSION" \
+            -o mpdmon${{ matrix.suffix }} \
+            .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mpdmon-${{ matrix.os }}-${{ matrix.arch }}
+          path: mpdmon${{ matrix.suffix }}
 
   release:
     name: Create Release
-    needs: build
     runs-on: ubuntu-latest
+    needs: [build, build-extended]
     if: startsWith(github.ref, 'refs/tags/')
     
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
 
-      - name: Generate SHA256 checksums
+      - name: Create release assets
         run: |
-          # Navigate to artifacts directory
           cd artifacts
+          mkdir -p release
           
-          # Create checksums for all files
-          find . -name "*.zip" -o -name "*.tar.gz" | sort | while read file; do
-            # Remove leading ./
-            file="${file#./}"
-            echo "Processing: $file"
-            
-            # Generate checksum
-            if [[ "$OSTYPE" == "darwin"* ]]; then
-              # macOS
-              shasum -a 256 "$file" > "$file.sha256"
-            else
-              # Linux
-              sha256sum "$file" > "$file.sha256"
+          # Process each artifact
+          for dir in */; do
+            if [ -d "$dir" ]; then
+              PLATFORM=${dir%/}
+              echo "Processing: $PLATFORM"
+              
+              # Find the binary
+              BINARY=$(find "$dir" -type f -name "mpdmon*" | head -1)
+              if [ -f "$BINARY" ]; then
+                # Create directory for this platform
+                mkdir -p "release/$PLATFORM"
+                
+                # Copy binary
+                cp "$BINARY" "release/$PLATFORM/"
+                
+                # Create archive
+                if [[ "$PLATFORM" == *"windows"* ]]; then
+                  cd "release/$PLATFORM"
+                  zip "../../mpdmon-$PLATFORM.zip" *
+                  cd ../..
+                else
+                  cd "release/$PLATFORM"
+                  tar czf "../../mpdmon-$PLATFORM.tar.gz" *
+                  cd ../..
+                fi
+              fi
             fi
-            
-            # Create a clean filename for the table
-            clean_name="${file#mpdmon-}"
-            echo "| ${clean_name%-*} | ${clean_name##*-} | [$clean_name](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/$file) |" >> release-table.txt
           done
           
-          # Create combined checksums file
-          cat *.sha256 > checksums.txt
-          
-          # Read the release table
-          RELEASE_TABLE=$(cat release-table.txt)
-          
-          # Create release body
-          cat > release-body.md << EOF
-          # MPD Monitor ${{ github.ref_name }}
-          
-          ## 📦 Downloads
-          
-          | Platform | Architecture | Download |
-          |----------|--------------|----------|
-          $RELEASE_TABLE
-          
-          ### 🔐 Verification
-          
-          SHA256 Checksums:
-          
-          \`\`\`
-          $(cat checksums.txt)
-          \`\`\`
-          
-          ## 🚀 Features
-          
-          - Real-time MPD monitoring
-          - GNTP/Growl notifications support
-          - Album art display in notifications
-          - Cross-platform support (Windows, Linux, macOS)
-          - Configurable via TOML file or command-line options
-          - Environment variable support
-          
-          ## 📖 Quick Start
-          
-          1. Download the binary for your platform
-          2. Extract the archive
-          3. Run: \`./mpdmon\`
-          
-          Example for Linux:
-          
-          \`\`\`bash
-          wget https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/mpdmon-${{ github.ref_name }}-linux-amd64.tar.gz
-          tar xzf mpdmon*.tar.gz
-          ./mpdmon
-          \`\`\`
-          
-          ## 🔧 Configuration
-          
-          See [README.md](https://github.com/${{ github.repository }}/blob/master/README.md) for detailed configuration options.
-          
-          Default configuration location: \`~/.config/mpdmon/config.toml\`
-          
-          ## 📄 License
-          
-          MIT License - See [LICENSE](https://github.com/${{ github.repository }}/blob/master/LICENSE) file for details.
-          
-          ## 🐛 Issues & Support
-          
-          Please report issues on [GitHub Issues](https://github.com/${{ github.repository }}/issues).
-          
-          ---
-          
-          *Built with ❤️ using GitHub Actions*
-          EOF
+          # Generate checksums
+          cd ..
+          sha256sum artifacts/*.zip artifacts/*.tar.gz > checksums.txt
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
           name: Release ${{ github.ref_name }}
-          body_path: artifacts/release-body.md
+          body: |
+            # MPD Monitor ${{ github.ref_name }}
+            
+            ## Downloads
+            
+            Run the following command for your platform:
+            
+            ```bash
+            # Linux
+            wget https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/mpdmon-linux-amd64.tar.gz
+            tar xzf mpdmon-linux-amd64.tar.gz
+            ./mpdmon
+            
+            # Windows
+            # Download mpdmon-windows-amd64.zip and extract
+            ```
+            
+            ## Verifying Downloads
+            
+            Check SHA256 checksums:
+            
+            ```bash
+            sha256sum -c checksums.txt
+            ```
+          files: |
+            artifacts/*.zip
+            artifacts/*.tar.gz
+            checksums.txt
           draft: false
           prerelease: false
-          files: |
-            artifacts/**/*.zip
-            artifacts/**/*.tar.gz
-            artifacts/checksums.txt
-          generate_release_notes: false
-
-  docker:
-    name: Build Docker Image
-    needs: test
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
-    
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/${{ github.repository }}
-          tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=ref,event=tag
-            type=sha,prefix=,suffix=,format=short
-
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          platforms: linux/amd64,linux/arm64,linux/arm/v7
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-  check:
-    name: Check Build
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/master'
-    
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v4
-        with:
-          go-version: '1.21'
-
-      - name: Verify Go modules
-        run: |
-          go mod verify
-          go mod tidy -v
-          git diff --exit-code go.mod go.sum || (echo "Go modules are not tidy. Run 'go mod tidy' and commit the changes." && exit 1)
-
-      - name: Check for common issues
-        run: |
-          # Check for large files
-          find . -name "*.go" -type f -size +100k | while read file; do
-            echo "Warning: Large Go file: $file"
-          done
-          
-          # Check for vendor directory (not needed with Go modules)
-          if [ -d "vendor" ]; then
-            echo "Note: vendor directory found. Consider removing it with Go modules."
-          fi
-
-  nightly:
-    name: Nightly Build
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/master' && github.event_name == 'push'
-    
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v4
-        with:
-          go-version: '1.21'
-
-      - name: Cache Go modules
-        uses: actions/cache@v3
-        with:
-          path: ~/go/pkg/mod
-          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            ${{ runner.os }}-go-
-
-      - name: Build nightly
-        run: |
-          VERSION="nightly-$(date -u +'%Y%m%d')-$(git rev-parse --short HEAD)"
-          echo "Building version: $VERSION"
-          
-          # Build for Linux amd64 (most common for nightly)
-          GOOS=linux GOARCH=amd64 go build \
-            -ldflags="-s -w -X main.version=$VERSION" \
-            -o mpdmon-nightly-linux-amd64 \
-            .
-          
-          # Also build for Windows amd64
-          GOOS=windows GOARCH=amd64 go build \
-            -ldflags="-s -w -X main.version=$VERSION" \
-            -o mpdmon-nightly-windows-amd64.exe \
-            .
-
-      - name: Upload nightly artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: mpdmon-nightly
-          path: |
-            mpdmon-nightly-linux-amd64
-            mpdmon-nightly-windows-amd64.exe
-          retention-days: 7

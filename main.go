@@ -943,9 +943,9 @@ func checkStatus(state *AppState) error {
             if state.debug {
                 log.Printf("⚠️  Failed to send notification: %v", err)
             }
-        } else if state.gntpEnabled {
-            fmt.Println("📢 State notification sent")
-        }
+        } //else if state.gntpEnabled {
+        //     fmt.Println("📢 State notification sent")
+        // }
     }
 
     state.lastState = currentState
