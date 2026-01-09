@@ -326,106 +326,251 @@ func reconnectMPD(state *AppState) error {
 	return nil
 }
 
+// func monitor(state *AppState) error {
+// 	w, err := mpd.NewWatcher("tcp",
+// 		fmt.Sprintf("%s:%s", state.config.MPD.Host, state.config.MPD.Port),
+// 		"", "player", "mixer")
+// 	if err != nil {
+// 		return fmt.Errorf("failed to create watcher: %v", err)
+// 	}
+// 	defer w.Close()
+
+// 	log.Println("🎵 MPD Monitor started")
+// 	log.Printf("📡 Monitoring: %s:%s", state.config.MPD.Host, state.config.MPD.Port)
+// 	if state.gntpEnabled {
+// 		log.Printf("📢 GNTP Server: %s:%d", state.config.GNTP.Host, state.config.GNTP.Port)
+// 		log.Printf("✅ GNTP registered (icon mode: %s)", state.config.GNTP.IconMode)
+// 	} else {
+// 		log.Println("📢 GNTP/Growl notifications: disabled")
+// 	}
+// 	if state.debug {
+// 		log.Println("🐛 Debug mode: enabled")
+// 	}
+// 	fmt.Println(strings.Repeat("=", getTerminalWidth()))
+
+// 	// Initial status
+// 	if err := checkStatus(state); err != nil {
+// 		if state.debug {
+// 			log.Printf("⚠️  Initial status check failed: %v", err)
+// 		}
+// 	}
+
+// 	// Monitor for errors
+// 	go func() {
+// 		for err := range w.Error {
+// 			if state.debug {
+// 				log.Printf("❌ Watcher error: %v", err)
+// 			}
+// 		}
+// 	}()
+
+// 	// Monitor for events
+// 	for subsystem := range w.Event {
+// 		// Skip database updates to avoid race conditions and bugs
+// 		if subsystem == "database" || subsystem == "update" {
+// 			continue
+// 		}
+
+// 		if err := checkStatus(state); err != nil {
+// 			if state.debug {
+// 				log.Printf("⚠️  Status check failed: %v", err)
+// 			}
+
+// 			// Try to reconnect if connection lost
+// 			if strings.Contains(err.Error(), "EOF") || 
+// 			   strings.Contains(err.Error(), "connection") ||
+// 			   strings.Contains(err.Error(), "broken pipe") {
+				
+// 				if state.debug {
+// 					log.Println("🔄 Attempting to reconnect to MPD...")
+// 				}
+				
+// 				time.Sleep(2 * time.Second)
+				
+// 				if err := reconnectMPD(state); err != nil {
+// 					if state.debug {
+// 						log.Printf("❌ Reconnect failed: %v", err)
+// 					}
+// 					time.Sleep(5 * time.Second)
+// 					continue
+// 				}
+				
+// 				if state.debug {
+// 					log.Println("✅ Reconnected to MPD")
+// 				}
+				
+// 				// Recreate watcher
+// 				w.Close()
+// 				newWatcher, err := mpd.NewWatcher("tcp",
+// 					fmt.Sprintf("%s:%s", state.config.MPD.Host, state.config.MPD.Port),
+// 					"", "player", "mixer")
+// 				if err != nil {
+// 					if state.debug {
+// 						log.Printf("❌ Failed to recreate watcher: %v", err)
+// 					}
+// 					time.Sleep(5 * time.Second)
+// 					continue
+// 				}
+// 				w = newWatcher
+				
+// 				// Restart error monitor
+// 				go func() {
+// 					for err := range w.Error {
+// 						if state.debug {
+// 							log.Printf("❌ Watcher error: %v", err)
+// 						}
+// 					}
+// 				}()
+// 			}
+// 		}
+// 	}
+
+// 	return nil
+// }
+
 func monitor(state *AppState) error {
-	w, err := mpd.NewWatcher("tcp",
-		fmt.Sprintf("%s:%s", state.config.MPD.Host, state.config.MPD.Port),
-		"", "player", "mixer")
-	if err != nil {
-		return fmt.Errorf("failed to create watcher: %v", err)
-	}
-	defer w.Close()
+    w, err := mpd.NewWatcher("tcp",
+        fmt.Sprintf("%s:%s", state.config.MPD.Host, state.config.MPD.Port),
+        "", "player", "mixer")
+    if err != nil {
+        return fmt.Errorf("failed to create watcher: %v", err)
+    }
+    defer w.Close()
 
-	log.Println("🎵 MPD Monitor started")
-	log.Printf("📡 Monitoring: %s:%s", state.config.MPD.Host, state.config.MPD.Port)
-	if state.gntpEnabled {
-		log.Printf("📢 GNTP Server: %s:%d", state.config.GNTP.Host, state.config.GNTP.Port)
-		log.Printf("✅ GNTP registered (icon mode: %s)", state.config.GNTP.IconMode)
-	} else {
-		log.Println("📢 GNTP/Growl notifications: disabled")
-	}
-	if state.debug {
-		log.Println("🐛 Debug mode: enabled")
-	}
-	fmt.Println(strings.Repeat("=", getTerminalWidth()))
+    log.Println("🎵 MPD Monitor started")
+    log.Printf("📡 Monitoring: %s:%s", state.config.MPD.Host, state.config.MPD.Port)
+    if state.gntpEnabled {
+        log.Printf("📢 GNTP Server: %s:%d", state.config.GNTP.Host, state.config.GNTP.Port)
+        log.Printf("✅ GNTP registered (icon mode: %s)", state.config.GNTP.IconMode)
+    } else {
+        log.Println("📢 GNTP/Growl notifications: disabled")
+    }
+    if state.debug {
+        log.Println("🐛 Debug mode: enabled")
+    }
+    fmt.Println(strings.Repeat("=", getTerminalWidth()))
 
-	// Initial status
-	if err := checkStatus(state); err != nil {
-		if state.debug {
-			log.Printf("⚠️  Initial status check failed: %v", err)
-		}
-	}
+    // Initial status
+    if err := checkStatus(state); err != nil {
+        if state.debug {
+            log.Printf("⚠️  Initial status check failed: %v", err)
+        }
+    }
 
-	// Monitor for errors
-	go func() {
-		for err := range w.Error {
-			if state.debug {
-				log.Printf("❌ Watcher error: %v", err)
-			}
-		}
-	}()
+    // Create a channel to signal when the error monitoring goroutine should stop
+    stopErrorMonitor := make(chan struct{})
+    
+    // Monitor for errors with proper cleanup
+    go func() {
+        defer func() {
+            if r := recover(); r != nil && state.debug {
+                log.Printf("Recovered from panic in error monitor: %v", r)
+            }
+        }()
+        
+        for {
+            select {
+            case err, ok := <-w.Error:
+                if !ok {
+                    // Channel closed, exit goroutine
+                    return
+                }
+                if state.debug {
+                    log.Printf("❌ Watcher error: %v", err)
+                }
+            case <-stopErrorMonitor:
+                // Received stop signal
+                return
+            }
+        }
+    }()
 
-	// Monitor for events
-	for subsystem := range w.Event {
-		// Skip database updates to avoid race conditions and bugs
-		if subsystem == "database" || subsystem == "update" {
-			continue
-		}
+    // Monitor for events
+    for subsystem := range w.Event {
+        // Skip database updates to avoid race conditions and bugs
+        if subsystem == "database" || subsystem == "update" {
+            continue
+        }
 
-		if err := checkStatus(state); err != nil {
-			if state.debug {
-				log.Printf("⚠️  Status check failed: %v", err)
-			}
+        if err := checkStatus(state); err != nil {
+            if state.debug {
+                log.Printf("⚠️  Status check failed: %v", err)
+            }
 
-			// Try to reconnect if connection lost
-			if strings.Contains(err.Error(), "EOF") || 
-			   strings.Contains(err.Error(), "connection") ||
-			   strings.Contains(err.Error(), "broken pipe") {
-				
-				if state.debug {
-					log.Println("🔄 Attempting to reconnect to MPD...")
-				}
-				
-				time.Sleep(2 * time.Second)
-				
-				if err := reconnectMPD(state); err != nil {
-					if state.debug {
-						log.Printf("❌ Reconnect failed: %v", err)
-					}
-					time.Sleep(5 * time.Second)
-					continue
-				}
-				
-				if state.debug {
-					log.Println("✅ Reconnected to MPD")
-				}
-				
-				// Recreate watcher
-				w.Close()
-				newWatcher, err := mpd.NewWatcher("tcp",
-					fmt.Sprintf("%s:%s", state.config.MPD.Host, state.config.MPD.Port),
-					"", "player", "mixer")
-				if err != nil {
-					if state.debug {
-						log.Printf("❌ Failed to recreate watcher: %v", err)
-					}
-					time.Sleep(5 * time.Second)
-					continue
-				}
-				w = newWatcher
-				
-				// Restart error monitor
-				go func() {
-					for err := range w.Error {
-						if state.debug {
-							log.Printf("❌ Watcher error: %v", err)
-						}
-					}
-				}()
-			}
-		}
-	}
+            // Try to reconnect if connection lost
+            if strings.Contains(err.Error(), "EOF") ||
+                strings.Contains(err.Error(), "connection") ||
+                strings.Contains(err.Error(), "broken pipe") {
 
-	return nil
+                if state.debug {
+                    log.Println("🔄 Attempting to reconnect to MPD...")
+                }
+
+                // Signal the error monitoring goroutine to stop
+                close(stopErrorMonitor)
+                
+                time.Sleep(2 * time.Second)
+
+                if err := reconnectMPD(state); err != nil {
+                    if state.debug {
+                        log.Printf("❌ Reconnect failed: %v", err)
+                    }
+                    time.Sleep(5 * time.Second)
+                    
+                    // Recreate the stop channel for the next iteration
+                    stopErrorMonitor = make(chan struct{})
+                    continue
+                }
+
+                if state.debug {
+                    log.Println("✅ Reconnected to MPD")
+                }
+
+                // Recreate watcher
+                w.Close()
+                newWatcher, err := mpd.NewWatcher("tcp",
+                    fmt.Sprintf("%s:%s", state.config.MPD.Host, state.config.MPD.Port),
+                    "", "player", "mixer")
+                if err != nil {
+                    if state.debug {
+                        log.Printf("❌ Failed to recreate watcher: %v", err)
+                    }
+                    time.Sleep(5 * time.Second)
+                    
+                    // Recreate the stop channel for the next iteration
+                    stopErrorMonitor = make(chan struct{})
+                    continue
+                }
+                w = newWatcher
+
+                // Restart error monitor with new watcher
+                stopErrorMonitor = make(chan struct{})
+                go func() {
+                    defer func() {
+                        if r := recover(); r != nil && state.debug {
+                            log.Printf("Recovered from panic in error monitor: %v", r)
+                        }
+                    }()
+                    
+                    for {
+                        select {
+                        case err, ok := <-w.Error:
+                            if !ok {
+                                return
+                            }
+                            if state.debug {
+                                log.Printf("❌ Watcher error: %v", err)
+                            }
+                        case <-stopErrorMonitor:
+                            return
+                        }
+                    }
+                }()
+            }
+        }
+    }
+
+    return nil
 }
 
 func checkStatus(state *AppState) error {
@@ -474,9 +619,9 @@ func checkStatus(state *AppState) error {
 			if state.debug {
 				log.Printf("⚠️  Failed to send notification: %v", err)
 			}
-		} else if state.gntpEnabled {
-			fmt.Println("📢 Notification sent")
-		}
+		} //else if state.gntpEnabled {
+		// 	fmt.Println("📢 Notification sent")
+		// }
 
 		state.lastSongFile = currentFile
 	}

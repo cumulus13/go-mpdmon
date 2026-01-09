@@ -289,7 +289,7 @@ MPD needs to be configured to save/access cover art:
   -mpd-timeout 15
 ```
 
-Atau config.toml:
+or config.toml:
 ```toml
 [mpd]
 timeout = 15  # Longer timeout for mobile
